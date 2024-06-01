@@ -14,8 +14,6 @@ onMounted(async () => {
   canvas!.style.width = `${800}px`;
 
   // 初始化画布
-  main();
+  main(canvas);
 });
 </script>
-
-<style></style>

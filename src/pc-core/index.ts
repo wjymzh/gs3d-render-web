@@ -2,14 +2,18 @@ import { createGraphicsDevice } from "playcanvas";
 import { Events } from "./events";
 import { initMaterials } from "./material";
 import { getSceneConfig } from "./scene-config";
+import { Scene } from "./scene";
+import { registerEditorEvents } from "./editor";
 // import { UI } from "./ui";
 
-export async function main() {
+export async function main(renders: HTMLCanvasElement) {
+  // 获取当前url
+  const url = new URL(window.location.href);
   // 基础事件对象
   const events = new Events();
 
   // 获取实例
-  const render = document.getElementById("render") as HTMLCanvasElement;
+  const render = renders as HTMLCanvasElement;
 
   // 创建图形设备
   const graphicsDevice = await createGraphicsDevice(render, {
@@ -28,8 +32,22 @@ export async function main() {
 
   // 获取当前场景初始配置
   const sceneConfig = getSceneConfig(overrides);
+
+  // 构建场景实例
+  const scene = new Scene(events, sceneConfig, render, graphicsDevice);
+
+  // 加载模型
+  await scene.load();
+
+  // 通过url参数加载模型
+  const loadParam = url.searchParams.get("load");
+  const loadUrl = loadParam && decodeURIComponent(loadParam);
+  if (loadUrl) {
+    await scene.loadModel(loadUrl, loadUrl);
+  }
 }
 
+// 参数初始化
 const getURLArgs = () => {
   // extract settings from command line in non-prod builds only
   const config = {};

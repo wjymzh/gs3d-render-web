@@ -1,5 +1,4 @@
 // @ts-nocheck
-
 import {
   BUFFER_STATIC,
   PRIMITIVE_LINES,
@@ -15,7 +14,6 @@ import { Debug } from "./debug";
 import { Serializer } from "./serializer";
 
 class Grid extends Debug {
-  declare scene: any;
   constructor() {
     super();
   }

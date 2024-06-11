@@ -3,8 +3,6 @@ import { Events } from "./events";
 import { initMaterials } from "./material";
 import { getSceneConfig } from "./scene-config";
 import { Scene } from "./scene";
-import { registerEditorEvents } from "./editor";
-// import { UI } from "./ui";
 
 export async function main(renders: HTMLCanvasElement) {
   // 获取当前url
@@ -45,6 +43,8 @@ export async function main(renders: HTMLCanvasElement) {
   if (loadUrl) {
     await scene.loadModel(loadUrl, loadUrl);
   }
+
+  events.fire("splatSize", 2);
 }
 
 // 参数初始化

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import {
   math,
   ADDRESS_CLAMP_TO_EDGE,

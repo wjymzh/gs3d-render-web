@@ -1,22 +1,25 @@
+// @ts-nocheck
 import {
-  BoundingBox,
-  Entity,
-  GraphicsDevice,
-  Layer,
   LAYERID_DEPTH,
-  Mouse,
   SORTMODE_NONE,
-  TouchDevice,
+  BoundingBox,
   Color,
+  Entity,
+  Layer,
+  Mouse,
+  TouchDevice,
+  GraphicsDevice,
 } from "playcanvas";
-import { Element, ElementType, ElementTypeList } from "./element";
-import { Events } from "./events";
-import { SceneConfig } from "./scene-config";
 import { PCApp } from "./pc-app";
+import { Events } from "./events";
+import { Element, ElementType, ElementTypeList } from "./element";
+import { SceneState } from "./scene-state";
+import { SceneConfig } from "./scene-config";
 import { AssetLoader } from "./asset-loader";
+import { Model } from "./model";
 import { Splat } from "./splat";
 import { Camera } from "./camera";
-import { SceneState } from "./scene-state";
+import { CustomShadow as Shadow } from "./custom-shadow";
 import { Grid } from "./grid";
 
 const bound = new BoundingBox();
@@ -26,24 +29,28 @@ class Scene {
   config: SceneConfig;
   canvas: HTMLCanvasElement;
   app: PCApp;
-  forceRender = false;
   backgroundLayer: Layer;
   shadowLayer: Layer;
   debugLayer: Layer;
   gizmoLayer: Layer;
-  assetLoader: AssetLoader;
-  contentRoot: Entity;
-  cameraRoot: Entity;
+  sceneState = [new SceneState(), new SceneState()];
   elements: Element[] = [];
   bound = new BoundingBox();
-  camera: Camera;
-  sceneState = [new SceneState(), new SceneState()];
+  forceRender = false;
+
   canvasResize: { width: number; height: number } | null = null;
   targetSize = {
     width: 0,
     height: 0,
   };
+
+  assetLoader: AssetLoader;
+  camera: Camera;
+  shadow: Shadow;
   grid: Grid;
+
+  contentRoot: Entity;
+  cameraRoot: Entity;
 
   constructor(
     events: Events,
@@ -55,15 +62,16 @@ class Scene {
     this.config = config;
     this.canvas = canvas;
 
-    // 配置一个playcanvas 应用程序，超级简介的配置
+    // configure the playcanvas application. we render to an offscreen buffer so require
+    // only the simplest of backbuffers.
     this.app = new PCApp(canvas, {
       mouse: new Mouse(canvas),
       touch: new TouchDevice(canvas),
       graphicsDevice: graphicsDevice,
     });
 
-    // 手动控制场景渲染
-    // this.app.autoRender = false;
+    // only render the scene when instructed
+    this.app.autoRender = false;
     this.app._allowResize = false;
     this.app.scene.clusteredLightingEnabled = false;
 
@@ -74,28 +82,44 @@ class Scene {
     // @ts-ignore
     this.app.loader.getHandler("texture").imgParser.crossOrigin = "anonymous";
 
-    // 获取当前设备的像素比，让渲染设备进行时适配
+    // this is required to get full res AR mode backbuffer
     this.app.graphicsDevice.maxPixelRatio = window.devicePixelRatio;
 
-    // 配置深度图层
-    const depthLayer = this.app.scene.layers.getLayerById(
-      LAYERID_DEPTH
-    ) as Layer;
+    // configure application canvas
+    const observer = new ResizeObserver((entries: ResizeObserverEntry[]) => {
+      if (entries.length > 0) {
+        const entry = entries[0];
+        if (entry) {
+          if (entry.devicePixelContentBoxSize) {
+            // on non-safari browsers, we are given the pixel-perfect canvas size
+            this.canvasResize = {
+              width: document.body.clientWidth,
+              height: document.body.clientHeight,
+            };
+          }
+        }
+        this.forceRender = true;
+      }
+    });
+
+    observer.observe(window.document.getElementById("canvas-container"));
+
+    // configure depth layers to handle dynamic refraction
+    const depthLayer = this.app.scene.layers.getLayerById(LAYERID_DEPTH);
     this.app.scene.layers.remove(depthLayer);
     this.app.scene.layers.insertOpaque(depthLayer, 2);
 
-    // 注册渲染实例毁回调函数
     // register application callbacks
     this.app.on("update", (deltaTime: number) => this.onUpdate(deltaTime));
-    // this.app.on("prerender", () => this.onPreRender());
-    // this.app.on("postrender", () => this.onPostRender());
+    this.app.on("prerender", () => this.onPreRender());
+    this.app.on("postrender", () => this.onPostRender());
 
     // force render on device restored
     this.app.graphicsDevice.on("devicerestored", () => {
       this.forceRender = true;
     });
 
-    // 背景图层
+    // background layer
     this.backgroundLayer = new Layer({
       enabled: true,
       name: "Background Layer",
@@ -103,12 +127,13 @@ class Scene {
       transparentSortMode: SORTMODE_NONE,
     });
 
-    // 阴影网状背景
+    // shadow layer
+    // this layer contains shadow caster scene mesh instances, shadow-casting
+    // virtual light, shadow catching plane geometry and the main camera.
     this.shadowLayer = new Layer({
       name: "Shadow Layer",
     });
 
-    // 下面俩不知道干嘛的
     this.debugLayer = new Layer({
       enabled: true,
       name: "Debug Layer",
@@ -124,26 +149,23 @@ class Scene {
       transparentSortMode: SORTMODE_NONE,
     });
 
-    // 配置图层，插入图层，确定图层层级
     const layers = this.app.scene.layers;
-    const worldLayer = layers.getLayerByName("World") as Layer;
+    const worldLayer = layers.getLayerByName("World");
     const idx = layers.getOpaqueIndex(worldLayer);
     layers.insert(this.backgroundLayer, idx);
     layers.insert(this.shadowLayer, idx + 1);
     layers.insert(this.debugLayer, idx + 1);
     layers.push(this.gizmoLayer);
 
-    // 创建场景资源加载器
     this.assetLoader = new AssetLoader(
       this.app.assets,
       this.app.graphicsDevice.maxAnisotropy
     );
 
-    // 创建根实体
+    // create root entities
     this.contentRoot = new Entity("contentRoot");
     this.app.root.addChild(this.contentRoot);
 
-    // 创建相机实体
     this.cameraRoot = new Entity("cameraRoot");
     this.app.root.addChild(this.cameraRoot);
 
@@ -151,13 +173,13 @@ class Scene {
     this.camera = new Camera();
     this.add(this.camera);
 
-    this.grid = new Grid();
-    this.add(this.grid);
+    // this.shadow = new Shadow();
+    // this.add(this.shadow);
 
-    console.log(this.app);
+    // this.grid = new Grid();
+    // this.add(this.grid);
   }
 
-  // 加载入口
   async load() {
     const config = this.config;
 
@@ -174,36 +196,53 @@ class Scene {
       );
     }
 
+    // load env
+    if (config.env.url) {
+      promises.push(this.assetLoader.loadEnv({ url: config.env.url }));
+    }
+
     const elements = await Promise.all(promises);
 
     // add them to the scene
     elements.forEach((e) => this.add(e));
 
     this.updateBound();
+    this.camera.focus();
 
     // start the app
     this.app.start();
   }
 
-  // 加载新场景
   async loadModel(url: string, filename: string) {
     // clear error
     this.events.fire("error", null);
 
     try {
-      const model = (await this.assetLoader.loadModel({
-        url,
-        filename,
-      })) as Splat;
+      const model = await this.assetLoader.loadModel({ url, filename });
       this.add(model);
       this.updateBound();
+      this.camera.focus();
       this.events.fire("loaded", filename);
     } catch (err) {
       this.events.fire("error", err);
     }
   }
 
-  // 添加一个场景元素
+  clear() {
+    const models = this.getElementsByType(ElementType.model);
+    models.forEach((model) => {
+      this.remove(model);
+      (model as Model).destroy();
+    });
+
+    const splats = this.getElementsByType(ElementType.splat);
+    splats.forEach((splat) => {
+      this.remove(splat);
+      (splat as Splat).destroy();
+    });
+  }
+
+  // add a scene element
   add(element: Element) {
     if (!element.scene) {
       // add the new element
@@ -219,8 +258,19 @@ class Scene {
     }
   }
 
-  private forEachElement(action: (e: Element) => void) {
-    this.elements.forEach(action);
+  // remove an element from the scene
+  remove(element: Element) {
+    if (element.scene === this) {
+      // notify listeners
+      this.events.fire("scene.elementRemoved", element);
+
+      // notify all elements of scene removal
+      this.forEachElement((e) => e !== element && e.onRemoved(element));
+
+      element.remove();
+      element.scene = null;
+      this.elements.splice(this.elements.indexOf(element), 1);
+    }
   }
 
   // get scene bounds
@@ -236,6 +286,18 @@ class Scene {
         }
       }
     });
+  }
+
+  getElementsByType(elementType: ElementType) {
+    return this.elements.filter((e) => e.type === elementType);
+  }
+
+  get graphicsDevice() {
+    return this.app.graphicsDevice;
+  }
+
+  private forEachElement(action: (e: Element) => void) {
+    this.elements.forEach(action);
   }
 
   private onUpdate(deltaTime: number) {
@@ -285,8 +347,8 @@ class Scene {
 
   private onPreRender() {
     if (this.canvasResize) {
-      this.canvas.width = this.canvasResize.width;
-      this.canvas.height = this.canvasResize.height;
+      this.canvas.width = document.documentElement.clientWidth;
+      this.canvas.height = document.documentElement.clientHeight;
       this.canvasResize = null;
     }
 
@@ -343,3 +405,4 @@ class Scene {
 }
 
 export { Scene };
+export type { SceneConfig };

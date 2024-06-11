@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Events } from "./events";
 
 class UI {
